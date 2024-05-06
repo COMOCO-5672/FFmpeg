@@ -361,6 +361,7 @@ void parse_options(void *optctx, int argc, char **argv, const OptionDef *options
     optindex = 1;
     while (optindex < argc) {
         opt = argv[optindex++];
+		av_log(NULL, AV_LOG_ERROR, "parse opt:%s\n", opt);
 
         if (handleoptions && opt[0] == '-' && opt[1] != '\0') {
             if (opt[1] == '-' && opt[2] == '\0') {
