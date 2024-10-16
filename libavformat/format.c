@@ -255,6 +255,7 @@ int av_probe_input_buffer2(AVIOContext *pb, const AVInputFormat **fmt,
         }
     }
 
+	//NOTE:循环探测，获取到码率的相关信息,自动扩展探测大小
     for (probe_size = PROBE_BUF_MIN; probe_size <= max_probe_size && !*fmt && !eof;
          probe_size = FFMIN(probe_size << 1,
                             FFMAX(max_probe_size, probe_size + 1))) {
