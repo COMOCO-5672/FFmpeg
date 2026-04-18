@@ -772,6 +772,8 @@ static void decode_mb_p(AVSContext *h, enum cavs_mb mb_type)
         ff_cavs_mv(h, MV_FWD_X2, MV_FWD_X1, MV_PRED_MEDIAN,   BLK_8X8, ref[2]);
         ff_cavs_mv(h, MV_FWD_X3, MV_FWD_X0, MV_PRED_MEDIAN,   BLK_8X8, ref[3]);
     }
+    if (mb_type != P_SKIP && h->slice_weighting_flag && h->mb_weighting_flag)
+        skip_bits1(gb);
     ff_cavs_inter(h, mb_type);
     set_intra_mode_default(h);
     store_mvs(h);
@@ -909,6 +911,8 @@ static int decode_mb_b(AVSContext *h, enum cavs_mb mb_type)
                 ff_cavs_mv(h, MV_BWD_X1, MV_BWD_C2, MV_PRED_TOPRIGHT, BLK_8X16, 0);
         }
     }
+    if (mb_type != B_SKIP && h->slice_weighting_flag && h->mb_weighting_flag)
+        skip_bits1(&h->gb);
     ff_cavs_inter(h, mb_type);
     set_intra_mode_default(h);
     if (mb_type != B_SKIP)
@@ -926,6 +930,13 @@ static int decode_mb_b(AVSContext *h, enum cavs_mb mb_type)
 
 static inline int decode_slice_header(AVSContext *h, GetBitContext *gb)
 {
+    static const int8_t num_refs[3][2][2] = {
+        { { 1, 0 }, { 0, 0 } },
+        { { 4, 4 }, { 2, 2 } },
+        { { 4, 4 }, { 2, 2 } },
+    };
+    int first_field, have_pred, num_ref, i;
+
     if (h->stc > 0xAF)
         av_log(h->avctx, AV_LOG_ERROR, "unexpected start code 0x%02x\n", h->stc);
 
@@ -943,13 +954,38 @@ static inline int decode_slice_header(AVSContext *h, GetBitContext *gb)
         h->qp_fixed = get_bits1(gb);
         h->qp       = get_bits(gb, 6);
     }
+
+    h->slice_weighting_flag = 0;
+    h->mb_weighting_flag    = 0;
+
     /* inter frame or second slice can have weighting params */
-    if ((h->cur.f->pict_type != AV_PICTURE_TYPE_I) ||
-        (!h->pic_structure && h->mby >= h->mb_width / 2))
-        if (get_bits1(gb)) { //slice_weighting_flag
-            av_log(h->avctx, AV_LOG_ERROR,
-                   "weighted prediction not yet supported\n");
+    first_field = h->pic_structure || h->mby < h->mb_height / 2;
+    have_pred = h->cur.f->pict_type != AV_PICTURE_TYPE_I ||
+                (!h->pic_structure && !first_field);
+    if (have_pred) {
+        h->slice_weighting_flag = get_bits1(gb);
+        if (h->slice_weighting_flag) {
+            int pic_type = h->cur.f->pict_type == AV_PICTURE_TYPE_B ? 2 :
+                           h->cur.f->pict_type == AV_PICTURE_TYPE_P ? 1 : 0;
+
+            num_ref = num_refs[pic_type][h->pic_structure][first_field ? 0 : 1];
+            for (i = 0; i < num_ref; i++) {
+                skip_bits(gb, 8); /* luma_scale */
+                skip_bits(gb, 8); /* luma_shift */
+                skip_bits1(gb);
+                skip_bits(gb, 8); /* chroma_scale */
+                skip_bits(gb, 8); /* chroma_shift */
+                skip_bits1(gb);
+            }
+            h->mb_weighting_flag = get_bits1(gb);
+            if (!h->warned_weighting_pred) {
+                av_log(h->avctx, AV_LOG_WARNING,
+                       "CAVS weighted prediction is parsed but ignored; "
+                       "output may be inaccurate\n");
+                h->warned_weighting_pred = 1;
+            }
         }
+    }
     return 0;
 }
 
@@ -1315,7 +1351,7 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *rframe,
     }
 }
 
-const FFCodec ff_cavs_decoder = {
+const FFCodec ff_cavs_native_decoder = {
     .p.name         = "cavs",
     CODEC_LONG_NAME("Chinese AVS (Audio Video Standard) (AVS1-P2, JiZhun profile)"),
     .p.type         = AVMEDIA_TYPE_VIDEO,

@@ -7,7 +7,16 @@
         "command": "../configure",
         "args": ["--enable-debug"],
         "options": {
-          "cwd": "${workspaceFolder}/build"
+          "cwd": "${workspaceFolder}/build",
+          "env": {
+            "PATH": "D:\\github\\davs2\\install\\bin;D:\\msys64\\mingw64\\bin;D:\\msys64\\usr\\bin;${env:PATH}",
+            "MSYSTEM": "MINGW64",
+            "CHERE_INVOKING": "1"
+          },
+          "shell": {
+            "executable": "D:\\msys64\\usr\\bin\\bash.exe",
+            "args": ["-lc"]
+          }
         },
         "group": {
           "kind": "build",
@@ -20,7 +29,16 @@
         "type": "shell",
         "command": "make -j10",
         "options": {
-          "cwd": "${workspaceFolder}/build"
+          "cwd": "${workspaceFolder}/build",
+          "env": {
+            "PATH": "D:\\github\\davs2\\install\\bin;D:\\msys64\\mingw64\\bin;D:\\msys64\\usr\\bin;${env:PATH}",
+            "MSYSTEM": "MINGW64",
+            "CHERE_INVOKING": "1"
+          },
+          "shell": {
+            "executable": "D:\\msys64\\usr\\bin\\bash.exe",
+            "args": ["-lc"]
+          }
         },
         "group": {
           "kind": "build",

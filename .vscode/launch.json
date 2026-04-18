@@ -5,11 +5,24 @@
         "name": "Debug FFmpeg",
         "type": "cppdbg",
         "request": "launch",
-        "program": "${workspaceFolder}/build/ffplay_g",
-        "args": ["-i", "F:/video/yifa.mp4"],
+        "program": "${workspaceFolder}/build/ffplay_g.exe",
+        "args": ["-i", "http://172.17.110.14:5244/d/Local/%E6%95%B0%E6%8D%AE%E5%A4%87%E4%BB%BD2/PT/%5B%E4%B8%AD%E5%A4%AE%E7%94%B5%E8%A7%86%E5%8F%B0%E7%94%B5%E8%A7%86%E5%89%A7%E9%A2%91%E9%81%93%20%E6%88%91%E7%9A%84%E5%B1%B1%E4%B8%8E%E6%B5%B7%5D.CCTV-8.My.Destiny.2026.S01.1080i.HDTV.AVS%2B.DD5.1-QHstudIo/%5B%E4%B8%AD%E5%A4%AE%E7%94%B5%E8%A7%86%E5%8F%B0%E7%94%B5%E8%A7%86%E5%89%A7%E9%A2%91%E9%81%93%20%E6%88%91%E7%9A%84%E5%B1%B1%E4%B8%8E%E6%B5%B7%5D.CCTV-8.My.Destiny.2026.S01E15.1080i.HDTV.AVS%2B.DD5.1-QHstudIo.ts"],
         "stopAtEntry": false,
         "cwd": "${workspaceFolder}",
-        "environment": [],
+        "environment": [
+          {
+            "name": "PATH",
+            "value": "D:\\github\\davs2\\install\\bin;D:\\msys64\\mingw64\\bin;D:\\msys64\\usr\\bin;${env:PATH}"
+          },
+          {
+            "name": "MSYSTEM",
+            "value": "MINGW64"
+          },
+          {
+            "name": "CHERE_INVOKING",
+            "value": "1"
+          }
+        ],
         "externalConsole": false,
         "MIMode": "gdb",
         "setupCommands": [

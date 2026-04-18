@@ -1,5 +1,15 @@
 {
-    "terminal.integrated.shell.windows": "D:\\msys64\\usr\\bin\\bash.exe",
+    "terminal.integrated.defaultProfile.windows": "MSYS2 Bash",
+    "terminal.integrated.profiles.windows": {
+      "MSYS2 Bash": {
+        "path": "D:\\msys64\\usr\\bin\\bash.exe",
+        "args": ["--login", "-i"],
+        "env": {
+          "MSYSTEM": "MINGW64",
+          "CHERE_INVOKING": "1"
+        }
+      }
+    },
     "terminal.integrated.env.windows": {
       "PATH": "D:\\msys64\\mingw64\\bin;D:\\msys64\\usr\\bin;${env:PATH}"
     },

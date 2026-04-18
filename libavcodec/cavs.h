@@ -188,6 +188,9 @@ typedef struct AVSContext {
     int loop_filter_disable;
     int alpha_offset, beta_offset;
     int ref_flag;
+    int slice_weighting_flag;
+    int mb_weighting_flag;
+    int warned_weighting_pred;
     int mbx, mby, mbidx; ///< macroblock coordinates
     int flags;         ///< availability flags of neighbouring macroblocks
     int stc;           ///< last start code

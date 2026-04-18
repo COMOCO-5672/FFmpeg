@@ -674,7 +674,7 @@ static int cavs_decode_frame(AVCodecContext *avctx, AVFrame *frame, int *got_fra
     }
 }
 
-const FFCodec ff_cavs_decoder = {
+const FFCodec ff_cavs_lib_decoder = {
     .p.name           = "cavs",    
     .p.long_name    = NULL_IF_CONFIG_SMALL("Chinese AVS (Audio Video Standard) (AVS1-P2, JiZhun profile) and (AVS1-P16, Guangdian profile)"),
     .p.type           = AVMEDIA_TYPE_VIDEO,
