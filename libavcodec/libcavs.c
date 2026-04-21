@@ -153,14 +153,14 @@ void  cavs_threadpool_delete( cavs_threadpool_t *pool );
 typedef struct {
     unsigned char *f; /* save stream address */
     unsigned char *f_end;
-    unsigned char buf[SVA_STREAM_BUF_SIZE];  //娴佺紦鍐插尯,size must be large than 3 bytes
-    unsigned int uClearBits;                //涓嶅惈濉�鍏呬綅鐨勪綅缂撳啿锛�32浣嶏紝鍒濆�嬪�兼槸0xFFFFFFFF
-    unsigned int uPre3Bytes;                //鍚�濉�鍏呬綅鐨勪綅缂撳啿锛�32浣嶏紝鍒濆�嬪�兼槸0x00000000
-    int iBytePosition;		                   //褰撳墠瀛楄妭浣嶇疆
-    int iBufBytesNum;		                   //鏈�杩戜竴娆¤�诲叆缂撳啿鍖虹殑瀛楄妭鏁�
-    int iClearBitsNum;		                   //涓嶅惈濉�鍏呬綅鐨勪綅鐨勪釜鏁�
-    int iStuffBitsNum;		                   //宸插墧闄ょ殑濉�鍏呬綅鐨勪釜鏁帮紝閬囧埌寮�濮嬬爜鏃剁疆0
-    int iBitsCount;			                   //鐮佹祦鎬讳綅鏁�
+    unsigned char buf[SVA_STREAM_BUF_SIZE];  // stream buffer; must be larger than 3 bytes
+    unsigned int uClearBits;                // bit buffer with stuffing bits removed; initialized to 0xFFFFFFFF
+    unsigned int uPre3Bytes;                // raw bit buffer before stuffing-bit removal; initialized to 0x00000000
+    int iBytePosition;		                   // current byte position in the source stream
+    int iBufBytesNum;		                   // number of bytes currently loaded into the source buffer
+    int iClearBitsNum;		                   // number of valid bits currently stored in uClearBits
+    int iStuffBitsNum;		                   // number of removed stuffing bits; reset when a start code is found
+    int iBitsCount;			                   // total number of consumed bits
 
     int demulate_enable;
 } InputStream;
@@ -483,14 +483,11 @@ typedef struct tagcavs_video_sequence_header
 	uint8_t  i_aspect_ratio;/*4bits u(4)*/
 	uint8_t  i_frame_rate_code;/*4bits u(4)*/
 	uint32_t i_bit_rate;
-	/*30bits u(30) 鍒嗕袱閮ㄥ垎鑾峰緱
-	 18bits bit_rate_lower;
-	 12bits bit_rate_upper銆�
-	鍏堕棿鏈�1bit鐨刴arker_bit闃叉�㈣捣濮嬬爜鐨勭珵浜�*/
+	/* 30-bit bit_rate encoded as 18 lower bits and 12 upper bits, with a marker bit between them. */
 	uint8_t  b_low_delay;/*1bit u(1)*/
-	//杩欓噷鏈�1bit鐨刴arker_bit
+	// marker bit before bbv_buffer_size
 	uint32_t i_bbv_buffer_size;/*18bits u(18)*/
-	//杩樻湁3bits鐨剅eserved_bits锛屽浐瀹氫负'000' 
+	// 3 reserved bits; must be '000'
 		/************************************************************************/
 	/* yidong_profile       0x34                                                                                       */
 	/************************************************************************/
@@ -521,20 +518,20 @@ typedef struct tagcavs_picture_header
 {
     uint16_t i_bbv_delay;/*16bits u(16)*/
 
-    uint8_t  i_picture_coding_type;/*2bits u(2) pb_piture_header涓撴湁*/
-    uint8_t  b_time_code_flag;/*1bit u(1) i_piture_header涓撴湁*/
-    uint32_t i_time_code;/*24bits u(24) i_piture_header涓撴湁*/
+    uint8_t  i_picture_coding_type;/*2bits u(2); present only in PB picture headers*/
+    uint8_t  b_time_code_flag;/*1bit u(1); present only in I picture headers*/
+    uint32_t i_time_code;/*24bits u(24); present only in I picture headers*/
     uint8_t  i_picture_distance;/*8bits u(8)*/
     uint32_t i_bbv_check_times;/*ue(v)*/
     uint8_t  b_progressive_frame;/*1bit u(1)*/
     uint8_t  b_picture_structure;/*1bit u(1)*/
-    uint8_t  b_advanced_pred_mode_disable;/*1bit u(1) pb_piture_header涓撴湁*/
+    uint8_t  b_advanced_pred_mode_disable;/*1bit u(1); present only in PB picture headers*/
     uint8_t  b_top_field_first;/*1bit u(1)*/
     uint8_t  b_repeat_first_field;/*1bit u(1)*/
     uint8_t  b_fixed_picture_qp;/*1bit u(1)*/
     uint8_t  i_picture_qp;/*6bits u(6)*/
-    uint8_t  b_picture_reference_flag;/*1bit u(1) pb_piture_header涓撴湁*/
-    /*4bits淇濈暀瀛楄妭reserved_bits鍥哄畾涓�'0000'*/
+    uint8_t  b_picture_reference_flag;/*1bit u(1); present only in PB picture headers*/
+    /* 4 reserved bits; must be '0000' */
     uint8_t  b_no_forward_reference_flag;
     uint8_t  b_skip_mode_flag;/*1bit u(1)*/
     uint8_t  b_loop_filter_disable;/*1bit u(1)*/
@@ -602,7 +599,7 @@ typedef struct tagcavs_sequence_display_extension
 	uint8_t  i_matrix_coefficients;/*8bits u(8)*/
 	uint32_t i_display_horizontal_size;/*14bits u(14)*/
 	uint32_t i_display_vertical_size;/*14bits u(14)*/
-	//杩樻湁2bits鐨剅eserved_bits锛�
+	// 2 reserved bits follow display_vertical_size
 	uint8_t  i_stereo_packing_mode;
 }cavs_sequence_display_extension;
 
@@ -611,64 +608,51 @@ typedef struct tagcavs_copyright_extension
 	uint8_t  b_copyright_flag;/*1bit u(1)*/
 	uint8_t  i_copyright_id;/*8bits u(8)*/
 	uint8_t  b_original_or_copy;/*1bit u(1)*/
-	//杩欓噷鏈変繚鐣�7bits鐨剅eserved_bits
+	// 7 reserved bits follow original_or_copy
 	uint64_t i_copyright_number;
-	/*64bits u(64)鍒嗕笁涓�閮ㄥ垎鍑虹幇锛�
-	20bits copyright_number_1;
-	22bits copyright_number_2;
-	22bits copyright_number_3
-	鍏堕棿鍒嗗埆宓屽叆2涓�1bit鐨刴arker_bit*/
+	/* 64-bit copyright number encoded as 20, 22 and 22 bits with marker bits between the parts. */
 }cavs_copyright_extension;
 
 typedef struct tagcavs_camera_parameters_extension
 {
-	//1bit鐨剅eserved_bits
+	// 1 reserved bit precedes camera_id
 	uint8_t  i_camera_id;/*7bits u(7)*/
-	//杩欓噷鏈�1bit鐨刴arker_bit
+	// marker bit after camera_id
 	uint32_t i_height_of_image_device;/*22bits u(22)*/
-	//杩欓噷鏈�1bit鐨刴arker_bit
+	// marker bit after height_of_image_device
 	uint32_t i_focal_length;/*22bits u(22)*/
-	//杩欓噷鏈�1bit鐨刴arker_bit
+	// marker bit after focal_length
 	uint32_t i_f_number;/*22bits u(22)*/
-	//杩欓噷鏈�1bit鐨刴arker_bit
+	// marker bit after f_number
 	uint32_t i_vertical_angle_of_view;/*22bits u(22)*/
-	//杩欓噷鏈�1bit鐨刴arker_bit
+	// marker bit after vertical_angle_of_view
 	int32_t  i_camera_position_x;
-	/*32bits i(32) 鍒嗕袱閮ㄥ垎鑾峰緱
-	16bits camera_position_x_upper;
-	16bits camera_position_x_lower;
-    鍏堕棿鏈�1bit鐨刴arker_bit闃叉�㈣捣濮嬬爜鐨勭珵浜�*/
+	/* camera_position_x encoded as two 16-bit halves with a marker bit between them. */
 	int32_t  i_camera_position_y;
-	/*32bits i(32) 鍒嗕袱閮ㄥ垎鑾峰緱
-	16bits camera_position_x_upper;
-	16bits camera_position_x_lower;
-    鍏堕棿鏈�1bit鐨刴arker_bit闃叉�㈣捣濮嬬爜鐨勭珵浜�*/
+	/* camera_position_y encoded as two 16-bit halves with a marker bit between them. */
 	int32_t  i_camera_position_z;
-	/*32bits i(32) 鍒嗕袱閮ㄥ垎鑾峰緱
-	16bits camera_position_x_upper;
-	16bits camera_position_x_lower;
-    鍏堕棿鏈�1bit鐨刴arker_bit闃叉�㈣捣濮嬬爜鐨勭珵浜�*/
-	//杩欓噷鏈�1bit鐨刴arker_bit
+	/* camera_position_z encoded as two 16-bit halves with a marker bit between them. */
+	// marker bit after camera_position_z
 	int32_t i_camera_direction_x;/*22bits i(22)*/
-	//杩欓噷鏈�1bit鐨刴arker_bit
+	// marker bit after camera_direction_x
 	int32_t i_camera_direction_y;/*22bits i(22)*/
-	//杩欓噷鏈�1bit鐨刴arker_bit
+	// marker bit after camera_direction_y
 	int32_t i_camera_direction_z;/*22bits i(22)*/
 
-	//杩欓噷鏈�1bit鐨刴arker_bit
+	// marker bit after camera_direction_z
 	int32_t i_image_plane_vertical_x;/*22bits i(22)*/
-	//杩欓噷鏈�1bit鐨刴arker_bit
+	// marker bit after image_plane_vertical_x
 	int32_t i_image_plane_vertical_y;/*22bits i(22)*/
-	//杩欓噷鏈�1bit鐨刴arker_bit
+	// marker bit after image_plane_vertical_y
 	int32_t i_image_plane_vertical_z;/*22bits i(22)*/
-	//杩欓噷鏈�1bit鐨刴arker_bit
-	//杩樻湁32bits鐨剅eserved_bits锛�
+	// marker bit after image_plane_vertical_z
+	// no additional payload follows in this extension
 }cavs_camera_parameters_extension;
 
 typedef struct tagcavs_picture_display_extension
 {
 	uint32_t i_number_of_frame_centre_offsets;
-	/*鍏冪礌涓�鏁帮紝鐢辫��娉曟淳鐢熻幏寰梒avs_sequence_display_extension锛屼笉鍗犵敤bits*/
+	/* Each frame-centre offset is stored as a horizontal/vertical signed pair separated by marker bits. */
 	uint32_t i_frame_centre_horizontal_offset[4];/*16bits i(16)*/
 	uint32_t i_frame_centre_vertical_offset[4];/*16bits i(16)*/
 }cavs_picture_display_extension;
@@ -1651,13 +1635,13 @@ typedef struct
 {
     uint8_t *p_ori;
     unsigned char buf[SVA_STREAM_BUF_SIZE];
-    unsigned int uClearBits;                //涓嶅惈濉�鍏呬綅鐨勪綅缂撳啿锛�32浣嶏紝鍒濆�嬪�兼槸0xFFFFFFFF
-    unsigned int uPre3Bytes;                //鍚�濉�鍏呬綅鐨勪綅缂撳啿锛�32浣嶏紝鍒濆�嬪�兼槸0x00000000
-    int iBytePosition;		                   //褰撳墠瀛楄妭浣嶇疆
-    int iBufBytesNum;		                   //鏈�杩戜竴娆¤�诲叆缂撳啿鍖虹殑瀛楄妭鏁�
-    int iClearBitsNum;		                   //涓嶅惈濉�鍏呬綅鐨勪綅鐨勪釜鏁�
-    int iStuffBitsNum;		                   //宸插墧闄ょ殑濉�鍏呬綅鐨勪釜鏁帮紝閬囧埌寮�濮嬬爜鏃剁疆0
-    int iBitsCount;			                   //鐮佹祦鎬讳綅鏁�
+    unsigned int uClearBits;                // bit buffer with stuffing bits removed; initialized to 0xFFFFFFFF
+    unsigned int uPre3Bytes;                // raw bit buffer before stuffing-bit removal; initialized to 0x00000000
+    int iBytePosition;		                   // current byte position in the source stream
+    int iBufBytesNum;		                   // number of bytes currently loaded into the source buffer
+    int iClearBitsNum;		                   // number of valid bits currently stored in uClearBits
+    int iStuffBitsNum;		                   // number of removed stuffing bits; reset when a start code is found
+    int iBitsCount;			                   // total number of consumed bits
     int demulate_enable;
 
     int64_t min_length;
@@ -1677,13 +1661,13 @@ typedef struct
 {
 	unsigned char m_buf[MAX_CODED_FRAME_SIZE];
 
-    uint8_t *p_start;	//褰撳墠甯х殑杈撳叆娴佽捣濮嬪湴鍧�
+    uint8_t *p_start;	// packed payload start, excluding the start code
     uint8_t *p_cur;
     uint8_t *p_end;
    
-    int i_len;			//甯у寘鎬诲瓧鑺傛暟
-    int frame_num;       //褰撳墠甯х殑瑙ｇ爜搴忓彿
-    int slice_num;		 //褰撳墠甯х殑slice鏁�
+    int i_len;			// packed payload length in bytes
+    int frame_num;       // number of complete frame units packed into this buffer
+    int slice_num;		 // number of slices packed into the current frame
     int max_frame_size;
 
     uint32_t i_startcode_type; /* frametype */
@@ -1849,17 +1833,17 @@ struct tagcavs_decoder
     cavs_image cur_aec; /* current decode frame */
 
     cavs_image *last_delayed_pframe;
-    int i_luma_offset[4];//鍥涗釜鍧楃浉瀵逛簬X0鐨勫湴鍧�鍋忕Щ
+    int i_luma_offset[4];// luma offsets for sub-blocks X0, X1, X2 and X3
 
     int b_bottom;
     
     int copy_flag3;
        
-    ///浠ヤ笅鏁版嵁缁撴瀯 閮ㄥ垎鏉ユ簮浜巉fmpeg
-    //杩欎簺閮芥槸璁＄畻杩愬姩鐭㈤噺鐨勭郴鏁帮紝鐢ㄤ簬鍔犲揩閫熷害
-    int i_sym_factor;    ///<鐢ㄤ簬B鍧楃殑瀵圭О妯″紡
-    int i_direct_den[4]; ///< 鐢ㄤ簬B鍧楃殑鐩存帴妯″紡
-    int i_scale_den[4];  ///< 鐢ㄤ簬涓磋繎鍧楃殑棰勬祴杩愬姩鐭㈤噺鐨勮�＄畻
+    // scaling factors used by motion-vector prediction
+    // these factors are derived from picture distance and reference distance
+    int i_sym_factor;    // scaling factor for symmetrical B prediction
+    int i_direct_den[4]; // denominators for direct B prediction scaling
+    int i_scale_den[4];  // denominators used when scaling neighbouring motion vectors
     int i_ref_distance[4]; /* four ref-field at most */
 
     uint8_t *p_y, *p_cb, *p_cr, *p_edge;
@@ -1868,13 +1852,13 @@ struct tagcavs_decoder
 	uint8_t *p_back_y, *p_back_cb, *p_back_cr;
 #endif
 
-    int i_mb_type;	//褰撳墠瀹忓潡鐨勭被鍨�
+    int i_mb_type;	// current macroblock type
     int i_cbp_code;
     int i_left_qp;
-    uint8_t *p_top_qp;//鐢ㄤ簬瀹忓潡鐨勭幆璺�婊ゆ尝
-    int i_qp;//褰撳墠浣跨敤鐨剄p锛�
-    int b_fixed_qp;//鍥哄畾qp鏍囧織锛屽彲浠ュ湪slice涓�鏀瑰彉
-    int i_cbp;//褰撳墠瀹忓潡鐨刢bp
+    uint8_t *p_top_qp;// QP cache for the macroblocks in the top row
+    int i_qp;// current macroblock QP
+    int b_fixed_qp;// true if the current macroblock QP is fixed by the slice or picture header
+    int i_cbp;// coded block pattern of the current macroblock
     int b_low_delay;
 
 #if B_MB_WEIGHTING
@@ -1886,7 +1870,7 @@ struct tagcavs_decoder
        0:    D3  B2  B3  C2
        4:    A1  X0  X1   -
        8:    A3  X2  X3   - */
-    //24涓�淇濆瓨鍓嶅悜鍚庡悜鍚勫潡杩愬姩鐭㈤噺
+    // motion-vector cache for the current macroblock and its neighbouring predictors
     cavs_vector mv[24];			/*mv context of current block*/
     cavs_vector *p_top_mv[2];
     cavs_vector *p_col_mv;		/*mv buffer of colocated ref frame(for direct mode)*/
@@ -1899,12 +1883,12 @@ struct tagcavs_decoder
        20:   A4 X12 X13 X14 X15
     */
     int i_intra_pred_mode_y[25];	//
-    int *p_top_intra_pred_mode_y;//淇濆瓨涓婇潰涓�琛岀殑浜�搴﹂�勬祴妯″紡
-    int i_pred_mode_chroma;	//褰撳墠鑹插害瀹忓潡鐨勯�勬祴妯″紡
+    int *p_top_intra_pred_mode_y;// luma intra prediction modes cached for the top row
+    int i_pred_mode_chroma;	// current chroma intra prediction mode
 
     //for CABAC
-    int8_t i_mb_type_left;		//宸﹁竟瀹忓潡鐨勭被鍨�
-    int8_t *p_mb_type_top;		//涓婅竟琛屽畯鍧楃殑绫诲瀷
+    int8_t i_mb_type_left;		// left macroblock type context used by CABAC
+    int8_t *p_mb_type_top;		// top macroblock type context array used by CABAC
     int8_t i_chroma_pred_mode_left;
     int8_t *p_chroma_pred_mode_top;
     int8_t i_cbp_left;
@@ -1921,19 +1905,19 @@ struct tagcavs_decoder
        6:    A3  X2  X3   */
     int8_t p_ref[2][9];				//[FWD/BWD][pos]
 
-    //杩欓噷瀹忓潡鍐呬笉鍚岀殑鍧楀�瑰簲鐨勮竟缂樹笉涓�鏍风敋鑷崇敤鍒板垰瑙ｇ爜鐨勬暟鎹�锛屾垨鑰呯敱浜庢湁浜涘彸杈瑰潡骞舵湭瑙ｇ爜鎵�浠ラ檺鍒朵簡涓�浜涢�勬祴妯″紡鐨勬槸浣跨敤
-    //鎵�鏈夌殑杩欎簺閮界瑪鍓婂湪deblock鍓嶄繚瀛樹笅鏉�
-    //鐢ㄤ簬淇濆瓨甯у唴棰勬祴鐨勫綋鍓嶅畯鍧椾复杩戠殑涓婇潰琛岀殑y鏍锋湰鏍囧噯涓璫[0~16]
+    // Intra prediction uses un-deblocked samples saved before the current MB is filtered.
+    // Top border samples are cached per macroblock row for later intra prediction.
+    // Left and internal border samples are cached for 4x4 intra prediction.
     uint8_t *p_top_border_y,*p_top_border_cb,*p_top_border_cr; 
-    //鐢ㄤ簬淇濆瓨甯у唴棰勬祴鐨勫綋鍓嶅畯鍧椾复杩戠殑宸﹁竟琛岀殑y鏍锋湰
+    // Top-left border samples are cached separately for Y, Cb and Cr.
     uint8_t i_left_border_y[26],i_left_border_cb[10],i_left_border_cr[10];
-    //鐢ㄤ簬涓�闂磋竟鐣屾牱鏈�鐨勪繚瀛橈紝鐢ㄤ簬X1,X3鐨勯�勬祴
+    // Base pointer to the colocated macroblock-type map used by direct prediction.
     uint8_t i_internal_border_y[26];
-    uint8_t i_topleft_border_y,i_topleft_border_cb,i_topleft_border_cr;//淇濆瓨鏍囧噯涓�鐨刢[0]鎴杛[0]
+    uint8_t i_topleft_border_y,i_topleft_border_cb,i_topleft_border_cr;// top-left saved border samples for Y, Cb and Cr
     uint8_t *p_col_type_base;
-    //鐢ㄤ簬淇濆瓨瀹忓潡鐨勭被鍨嬶紝浜嬪疄鍙�鏈塀_SKIP鍜孊_Direct浼氱敤鍒帮紝鎵�浠ュ彧闇�瑕佷繚瀛楶甯х殑灏卞彲浠ヤ簡
-    uint8_t *p_col_type;//褰撳墠瀹忓潡绫诲瀷鐨勫亸绉诲湴鍧�	
-    //淇濆瓨娈嬪樊鏁版嵁
+    // Pointer to the current position in the colocated macroblock-type map.
+    uint8_t *p_col_type;// current colocated macroblock type pointer
+    // Transform-coefficient workspace for the current macroblock.
     DCTELEM *p_block;
     int level_buf[64];
     int run_buf[64];
@@ -2142,14 +2126,14 @@ static const uint8_t dequant_shift[64] =
 		65535,35734,38973,42500,46341,50535,55109,60097,
 		32771,35734,38965,42497,46341,50535,55109,60099
 	};
-	static const uint8_t zigzag_progressive_4x4[16]=//鍥�35
+	static const uint8_t zigzag_progressive_4x4[16]=// progressive zigzag scan for 4x4 transforms
 	{
 		 0, 1,4, 8, 
 		 5, 2, 3, 6, 
 		 9, 12 ,13, 10,
 		 7, 11, 14, 15, 
 	};
-	static const uint8_t zigzag_progressive[64]=//鍥�33
+	static const uint8_t zigzag_progressive[64]=// progressive zigzag scan for 8x8 transforms
 	{
 			0, 1, 8, 16, 9, 2, 3, 10,
 			17, 24, 32, 25, 18, 11, 4, 5,
@@ -2161,7 +2145,7 @@ static const uint8_t dequant_shift[64] =
 			53, 60, 61, 54, 47, 55, 62, 63
 	};
 	
-	static const uint8_t zigzag_field[64]=//鍥�34
+	static const uint8_t zigzag_field[64]=// field zigzag scan for 8x8 transforms
 	{
 	    0, 8, 16, 1, 24, 32, 9, 17,
 		40, 48, 25, 2, 10, 56, 33, 18,
@@ -2458,7 +2442,7 @@ static const cavs_vlc intra_2dvlc[7] =
 		   { 0, 4, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
 		   2, 2, 2, 2, 2, 2, 2,-1,-1,-1},
 		   2, //golomb_order
-		   0, //inc_limit  鍜�8.3.1瀵瑰簲
+		   0, // inc_limit threshold for switching VLC context
 		   23, //max_run
 	   },
 	   {
@@ -2932,11 +2916,11 @@ static inline int median( int a, int b, int c )
     (( ARRAY[(INDEX)-1] + 2*ARRAY[(INDEX)] + ARRAY[(INDEX)+1] + 2) >> 2)
 
 /****************************************************************************
- * * 4x4浜�搴﹀潡甯у唴棰勬祴
+ * * 4x4 intra prediction helpers
  ****************************************************************************/
 
 /****************************************************************************
- * * cavs_intra_4x4_pred_vertical:甯у唴棰勬祴妯″紡涔嬪瀭鐩�
+ * * cavs_intra_4x4_pred_vertical: vertical 4x4 intra prediction
  ****************************************************************************/
 static UNUSED void cavs_intra_4x4_pred_vertical(uint8_t *p_dest,uint8_t *p_top,uint8_t *p_left,int i_stride)
 {
@@ -2948,7 +2932,7 @@ static UNUSED void cavs_intra_4x4_pred_vertical(uint8_t *p_dest,uint8_t *p_top,u
 	}
 }
 /****************************************************************************
- * * cavs_intra_4x4_pred_horizontal:甯у唴棰勬祴妯″紡涔嬫按骞�
+ * * cavs_intra_4x4_pred_horizontal: horizontal 4x4 intra prediction
  ****************************************************************************/
 static UNUSED void cavs_intra_4x4_pred_horizontal(uint8_t *p_dest,uint8_t *p_top,uint8_t *p_left,int i_stride)
 {
@@ -2961,7 +2945,7 @@ static UNUSED void cavs_intra_4x4_pred_horizontal(uint8_t *p_dest,uint8_t *p_top
     }
 }
 /****************************************************************************
- * * cavs_intra_4x4_pred_dc_128:甯у唴棰勬祴妯″紡涔嬬洿娴�,椤跺潡鍜屽乏鍧椾笉鑳藉緱鍒扮殑鎯呭喌涓嬪�勭悊
+ * * cavs_intra_4x4_pred_dc_128: DC=128 fallback when neighboring samples are unavailable
  ****************************************************************************/
 static UNUSED void cavs_intra_4x4_pred_dc_128(uint8_t *p_dest,uint8_t *p_top,uint8_t *p_left,int i_stride)
 {
@@ -2972,7 +2956,7 @@ static UNUSED void cavs_intra_4x4_pred_dc_128(uint8_t *p_dest,uint8_t *p_top,uin
 		*((uint64_t *)(p_dest+y*i_stride)) = i_value;
 }
 /****************************************************************************
- * * cavs_intra_4x4_pred_dc_lp:甯у唴棰勬祴妯″紡涔嬬洿娴�,椤跺潡鍜屽乏鍧楅兘鑳藉緱鍒扮殑鎯呭喌涓嬪�勭悊
+ * * cavs_intra_4x4_pred_dc_lp: low-pass DC prediction using top and left samples
  ****************************************************************************/
 static UNUSED void cavs_intra_4x4_pred_dc_lp(uint8_t *p_dest,uint8_t *p_top,uint8_t *p_left,int i_stride)
 {
@@ -2983,7 +2967,7 @@ static UNUSED void cavs_intra_4x4_pred_dc_lp(uint8_t *p_dest,uint8_t *p_top,uint
 }
 
 /****************************************************************************
- * * cavs_intra_4x4_pred_dc_lp_left:甯у唴棰勬祴妯″紡涔嬬洿娴�,椤跺潡涓嶈兘寰楀埌鐨勬儏鍐典笅澶勭悊
+ * * cavs_intra_4x4_pred_dc_lp_left: low-pass DC prediction using left samples only
  ****************************************************************************/
 static UNUSED void cavs_intra_4x4_pred_dc_lp_left(uint8_t *p_dest,uint8_t *p_top,uint8_t *p_left,int i_stride)
 {
@@ -2993,7 +2977,7 @@ static UNUSED void cavs_intra_4x4_pred_dc_lp_left(uint8_t *p_dest,uint8_t *p_top
             p_dest[y*i_stride+x] = LOWPASS(p_left,y+1);
 }
 /****************************************************************************
- * * cavs_intra_4x4_pred_dc_lp_top:甯у唴棰勬祴妯″紡涔嬬洿娴�,宸﹀潡涓嶈兘寰楀埌鐨勬儏鍐典笅澶勭悊
+ * * cavs_intra_4x4_pred_dc_lp_top: low-pass DC prediction using top samples only
  ****************************************************************************/
 static UNUSED void cavs_intra_4x4_pred_dc_lp_top(uint8_t *p_dest,uint8_t *p_top,uint8_t *p_left,int i_stride)
 {
@@ -3003,7 +2987,7 @@ static UNUSED void cavs_intra_4x4_pred_dc_lp_top(uint8_t *p_dest,uint8_t *p_top,
             p_dest[y*i_stride+x] = LOWPASS(p_top,x+1);
 }
 /****************************************************************************
- * * cavs_intra_4x4_pred_down_left:甯у唴棰勬祴妯″紡涔嬪乏涓� 鍧囧彲鐢�
+ * * cavs_intra_4x4_pred_down_left: down-left 4x4 intra prediction
  ****************************************************************************/
 static UNUSED void cavs_intra_4x4_pred_down_left(uint8_t *p_dest,uint8_t *p_top,uint8_t *p_left,int i_stride)
 {
@@ -3018,7 +3002,7 @@ static UNUSED void cavs_intra_4x4_pred_down_left(uint8_t *p_dest,uint8_t *p_top,
 		}
 } 
 /****************************************************************************
- * * cavs_intra_4x4_pred_down_left:甯у唴棰勬祴妯″紡涔嬪彸涓�
+ * * cavs_intra_4x4_pred_down_right: down-right 4x4 intra prediction
  ****************************************************************************/
 static UNUSED void cavs_intra_4x4_pred_down_right(uint8_t *p_dest,uint8_t *p_top,uint8_t *p_left,int i_stride)
 {
@@ -3033,7 +3017,7 @@ static UNUSED void cavs_intra_4x4_pred_down_right(uint8_t *p_dest,uint8_t *p_top
                 p_dest[y*i_stride+x] = LOWPASS(p_left,y-x);
 }
 /****************************************************************************
- * * cavs_intra_4x4_pred_vertical_left:甯у唴棰勬祴妯″紡涔嬪瀭鐩村乏
+ * * cavs_intra_4x4_pred_vertical_left: vertical-left 4x4 intra prediction
  ****************************************************************************/
 static UNUSED void cavs_intra_4x4_pred_vertical_left(uint8_t *p_dest,uint8_t *p_top,uint8_t *p_left,int i_stride)
 {
@@ -3048,7 +3032,7 @@ static UNUSED void cavs_intra_4x4_pred_vertical_left(uint8_t *p_dest,uint8_t *p_
 		}
 }
 /****************************************************************************
- * * cavs_intra_4x4_pred_horizontal_down:甯у唴棰勬祴妯″紡涔嬫按骞充笅
+ * * cavs_intra_4x4_pred_horizontal_down: horizontal-down 4x4 intra prediction
  ****************************************************************************/
 static UNUSED void cavs_intra_4x4_pred_horizontal_down(uint8_t *p_dest,uint8_t *p_top,uint8_t *p_left,int i_stride)
 {
@@ -3068,7 +3052,7 @@ static UNUSED void cavs_intra_4x4_pred_horizontal_down(uint8_t *p_dest,uint8_t *
 		}
 }
 /****************************************************************************
- * * cavs_intra_4x4_pred_vertical_right:甯у唴棰勬祴妯″紡涔嬪瀭鐩村彸
+ * * cavs_intra_4x4_pred_vertical_right: vertical-right 4x4 intra prediction
  ****************************************************************************/
 static UNUSED void cavs_intra_4x4_pred_vertical_right(uint8_t *p_dest,uint8_t *p_top,uint8_t *p_left,int i_stride)
 {
@@ -3088,7 +3072,7 @@ static UNUSED void cavs_intra_4x4_pred_vertical_right(uint8_t *p_dest,uint8_t *p
 		}
 }
 /****************************************************************************
- * * cavs_intra_4x4_pred_horizontal_up:甯у唴棰勬祴妯″紡涔嬫按骞充笂
+ * * cavs_intra_4x4_pred_horizontal_up: horizontal-up 4x4 intra prediction
  ****************************************************************************/
 static UNUSED void cavs_intra_4x4_pred_horizontal_up(uint8_t *p_dest,uint8_t *p_top,uint8_t *p_left,int i_stride)
 {
@@ -4576,7 +4560,7 @@ int cavs_get_video_sequence_header(cavs_bitstream *s,cavs_video_sequence_header 
     h->i_bbv_buffer_size = cavs_bitstream_get_bits(s, 18);
 
     if(cavs_bitstream_get_bits(s,3)!=0) //reserved bits
-    {/* 3bits碌脛'000' */
+    /* reserved bits must be zero */
     }
 
 	h->i_horizontal_size = width;
@@ -6562,7 +6546,7 @@ static void cavs_put_filt8_v_nd(uint8_t *dst, uint8_t *src1, uint8_t *src2, int 
 
 #define put(a, b)  a = cm[((b)+64)>>7]
 static void cavs_put_filt8_hv_egpr(uint8_t *dst, uint8_t *src1, uint8_t *src2, int dstStride, int srcStride)
-{//e隆垄g隆垄p隆垄r
+{// combined horizontal and vertical interpolation filter for EG/PR half-pel positions
      int32_t temp[8*(8+5)];
      int32_t *tmp = temp;
      uint8_t *cm = crop_table + MAX_NEG_CROP;
@@ -8937,11 +8921,11 @@ static void filter_mb(cavs_decoder *p, int i_mb_type)
                 0:    D3  B2  B3  C2
                 4:    A1  X0  X1   -
                 8:    A3  X2  X3   -
-                i_mb_type > P_8X8鍗宠〃绀築甯�
-                bs[8]涓�鍏�8涓�鍏冪礌鍒嗗埆琛ㄧず鏈�澶氫互4涓�8*8鐨勫潡鍒嗗壊鐨�4涓�鍨傜洿杈圭晫鍜�4涓�姘村钩杈圭晫锛屾瘡涓�杈圭晫鏄�8涓�璞＄礌
-                瀵逛簬16*8鎴栬��8*16搴旇�ヨ�冭檻鍏舵槸鍚﹀叿鏈変腑闂村垎鍓茬殑涓や釜姘村钩鍜屽瀭鐩磋竟鐣�
-                0锛�1锛�4锛�5搴旇�ユ槸瀹忓潡杈圭晫涓婄殑2涓�姘村钩鍜屽瀭鐩磋竟鐣�
-                鑰�2锛�3鏄�瀹忓潡鍐呭瀭鐩磋竟鐣岃�岋紝6锛�7鏄�瀹忓潡鍐呮按骞宠竟鐣�
+                /*
+                 * For inter-coded MB types above P_8X8, bs[8] stores edge
+                 * strength values for the four internal 8x8 edges and the
+                 * four outer macroblock edges. The mapping depends on the
+                 * 16x8 or 8x16 split direction selected by i_mb_type.
                 */
                 *((uint64_t *)bs) = 0;
                 if(partition_flags[i_mb_type] & SPLITV)
@@ -9039,11 +9023,11 @@ static void filter_mb(cavs_decoder *p, int i_mb_type)
                 0:    D3  B2  B3  C2
                 4:    A1  X0  X1   -
                 8:    A3  X2  X3   -
-                i_mb_type > P_8X8鍗宠〃绀築甯�
-                bs[8]涓�鍏�8涓�鍏冪礌鍒嗗埆琛ㄧず鏈�澶氫互4涓�8*8鐨勫潡鍒嗗壊鐨�4涓�鍨傜洿杈圭晫鍜�4涓�姘村钩杈圭晫锛屾瘡涓�杈圭晫鏄�8涓�璞＄礌
-                瀵逛簬16*8鎴栬��8*16搴旇�ヨ�冭檻鍏舵槸鍚﹀叿鏈変腑闂村垎鍓茬殑涓や釜姘村钩鍜屽瀭鐩磋竟鐣�
-                0锛�1锛�4锛�5搴旇�ユ槸瀹忓潡杈圭晫涓婄殑2涓�姘村钩鍜屽瀭鐩磋竟鐣�
-                鑰�2锛�3鏄�瀹忓潡鍐呭瀭鐩磋竟鐣岃�岋紝6锛�7鏄�瀹忓潡鍐呮按骞宠竟鐣�
+                /** mv motion vector cache
+                 * For inter-coded MB types above P_8X8, bs[8] stores edge
+                 * strength values for the four internal 8x8 edges and the
+                 * four outer macroblock edges. The mapping depends on the
+                 * 16x8 or 8x16 split direction selected by i_mb_type.
                 */
                 *((uint64_t *)bs) = 0;
                 if(partition_flags[i_mb_type] & SPLITV)
@@ -9701,13 +9685,13 @@ static inline int next_mb( cavs_decoder *p )
     if( p->param.b_accelerate )
     {
         for( i = 0; i <= 20; i += 4 )
-        {//鍘熸潵B3,X1,X3鐨勮繍鍔ㄧ煝閲忔垚涓哄彸杈规柊鐨勫畯鍧楃殑棰勬祴杩愬姩鐭㈤噺宸﹁竟鐨勫�欓�夊瓙鍗矰2,A1,A3
+        {// shift the cached left-side MV predictors for the next macroblock
             p->mv[i] = p->mv[i+2];
         }
 
-        //淇濆瓨X2,X3浣滀负涓嬮潰瀹忓潡鐨勯�勬祴杩愬姩鐭㈤噺鐨勫�欓�夊瓙鍗矪2,B3
+        // load D3 predictors from the top-row MV cache
         p->mv[MV_FWD_D3] = p->p_top_mv[0][i_offset+1];
-        p->mv[MV_BWD_D3] = p->p_top_mv[1][i_offset+1];//淇�鏀瑰墠鍏堜繚瀛樺埌D3;
+        p->mv[MV_BWD_D3] = p->p_top_mv[1][i_offset+1];// load backward D3 from the top cache
         p->p_top_mv[0][i_offset+0] = p->mv[MV_FWD_X2];
         p->p_top_mv[0][i_offset+1] = p->mv[MV_FWD_X3];
         p->p_top_mv[1][i_offset+0] = p->mv[MV_BWD_X2];
@@ -9745,16 +9729,16 @@ static inline int next_mb( cavs_decoder *p )
         p->i_mb_x++;
         if(p->i_mb_x == p->i_mb_width) 
         { 
-            //涓嬩竴琛屽畯鍧�
-            p->i_mb_flags = B_AVAIL|C_AVAIL;//濡傛灉i_mb_width=1;鍒機_AVAIL涓嶅彲寰楀埌
-            /* 娓呴櫎宸﹁竟鍧楅�勬祴妯″紡A1,A3*/
+            // move to the first macroblock of the next row
+            p->i_mb_flags = B_AVAIL|C_AVAIL;// only top and top-right neighbours are available at row start
+            /* left-side intra predictors are unavailable at the start of a new row */
             p->i_intra_pred_mode_y[5] = p->i_intra_pred_mode_y[10] = 
             p->i_intra_pred_mode_y[15] = p->i_intra_pred_mode_y[20] = NOT_AVAIL;
             
             p->i_intra_pred_mode_y_tab[p->i_mb_index][5] = p->i_intra_pred_mode_y_tab[p->i_mb_index][10] = 
             p->i_intra_pred_mode_y_tab[p->i_mb_index][15] = p->i_intra_pred_mode_y_tab[p->i_mb_index][20] = NOT_AVAIL;
               
-            /* 娓呴櫎宸﹁竟鍧楄繍鍔ㄧ煝閲廋2,A1,A3 */
+            /* left-side motion-vector predictors are unavailable at the start of a new row */
             for( i = 0; i <= 20; i += 4 )
             {
                 p->mv[i] = MV_NOT_AVAIL;
@@ -9796,12 +9780,12 @@ static inline int next_mb( cavs_decoder *p )
     else
     {
         for( i = 0; i <= 20; i += 4 )
-        {//鍘熸潵B3,X1,X3鐨勮繍鍔ㄧ煝閲忔垚涓哄彸杈规柊鐨勫畯鍧楃殑棰勬祴杩愬姩鐭㈤噺宸﹁竟鐨勫�欓�夊瓙鍗矰2,A1,A3
+        {// shift the cached left-side MV predictors for the next macroblock
             p->mv[i] = p->mv[i+2];
         }
-        //淇濆瓨X2,X3浣滀负涓嬮潰瀹忓潡鐨勯�勬祴杩愬姩鐭㈤噺鐨勫�欓�夊瓙鍗矪2,B3
+        // load D3 predictors from the top-row MV cache
         p->mv[MV_FWD_D3] = p->p_top_mv[0][i_offset+1];
-        p->mv[MV_BWD_D3] = p->p_top_mv[1][i_offset+1];//淇�鏀瑰墠鍏堜繚瀛樺埌D3;
+        p->mv[MV_BWD_D3] = p->p_top_mv[1][i_offset+1];// load backward D3 from the top cache
         p->p_top_mv[0][i_offset+0] = p->mv[MV_FWD_X2];
         p->p_top_mv[0][i_offset+1] = p->mv[MV_FWD_X3];
         p->p_top_mv[1][i_offset+0] = p->mv[MV_BWD_X2];
@@ -9839,13 +9823,13 @@ static inline int next_mb( cavs_decoder *p )
         p->i_mb_x++;
         if(p->i_mb_x == p->i_mb_width) 
         { 
-            //涓嬩竴琛屽畯鍧�
-            p->i_mb_flags = B_AVAIL|C_AVAIL;//濡傛灉i_mb_width=1;鍒機_AVAIL涓嶅彲寰楀埌
-            /* 娓呴櫎宸﹁竟鍧楅�勬祴妯″紡A1,A3*/
+            // move to the first macroblock of the next row
+            p->i_mb_flags = B_AVAIL|C_AVAIL;// only top and top-right neighbours are available at row start
+            /* left-side intra predictors are unavailable at the start of a new row */
             p->i_intra_pred_mode_y[5] = p->i_intra_pred_mode_y[10] = 
             p->i_intra_pred_mode_y[15] = p->i_intra_pred_mode_y[20] = NOT_AVAIL;
             
-            /* 娓呴櫎宸﹁竟鍧楄繍鍔ㄧ煝閲廋2,A1,A3 */
+            /* left-side motion-vector predictors are unavailable at the start of a new row */
             for( i = 0; i <= 20; i += 4 )
             {
                 p->mv[i] = MV_NOT_AVAIL;
@@ -10445,13 +10429,13 @@ static int get_residual_block4x4(cavs_decoder *p, int i_qp, uint8_t *p_dest4x4, 
     		symbol2D = cavs_bitstream_get_ue_k(&p->s,VLC_GC_Order_INTRA[CurrentVLCTable][0]);
     		if(symbol2D==EOB_Pos_4x4[CurrentVLCTable])
     		{
-    			vlc_numcoef = i;  // 0~i last is "0"? rm涓婄殑
+    			vlc_numcoef = i;  // EOB was found after coefficients 0..i-1
     			break;
     		}
     		if(symbol2D >= ESCAPE_CODE_PART2)
     		{
     			abs_lev_diff = 2+(symbol2D-ESCAPE_CODE_PART2)/2;
-    			mask = -(symbol2D & 1);//0鎴�-1
+    			mask = -(symbol2D & 1);// branchless sign mask: 0 -> 0, 1 -> -1
     			symbol2D = cavs_bitstream_get_ue_k(&p->s,0);
     			run = symbol2D;
 				if (run > 16)
@@ -10466,7 +10450,7 @@ static int get_residual_block4x4(cavs_decoder *p, int i_qp, uint8_t *p_dest4x4, 
     		{
     			run =((symbol2D-ESCAPE_CODE_PART1)&31)/2;
     			level =1+LEVRUN_INTRA[CurrentVLCTable][run];
-    			mask = -(symbol2D & 1);//0鎴�-1
+    			mask = -(symbol2D & 1);// branchless sign mask: 0 -> 0, 1 -> -1
     			level = (level^mask) - mask;
     		} 
     		else
@@ -10538,13 +10522,13 @@ static int get_residual_block4x4(cavs_decoder *p, int i_qp, uint8_t *p_dest4x4, 
     		symbol2D = cavs_bitstream_get_ue_k(&p->s,VLC_GC_Order_INTER[CurrentVLCTable][0]);
     		if(symbol2D==EOB_Pos_4x4[CurrentVLCTable])
     		{
-    			vlc_numcoef = i;  // 0~i last is "0"? rm涓婄殑
+    			vlc_numcoef = i;  // EOB was found after coefficients 0..i-1
     			break;
     		}
     		if(symbol2D >= ESCAPE_CODE_PART2)
     		{
     			abs_lev_diff = 2+(symbol2D-ESCAPE_CODE_PART2)/2;
-    			mask = -(symbol2D & 1);//0鎴�-1
+    			mask = -(symbol2D & 1);// branchless sign mask: 0 -> 0, 1 -> -1
     			symbol2D = cavs_bitstream_get_ue_k(&p->s,0);
     			run = symbol2D;
 				if (run > 16)
@@ -10559,7 +10543,7 @@ static int get_residual_block4x4(cavs_decoder *p, int i_qp, uint8_t *p_dest4x4, 
     		{
     			run =((symbol2D-ESCAPE_CODE_PART1)&31)/2;
     			level =1 + LEVRUN_INTER[CurrentVLCTable][run];
-    			mask = -(symbol2D & 1);//0鎴�-1
+    			mask = -(symbol2D & 1);// branchless sign mask: 0 -> 0, 1 -> -1
     			level = (level^mask) - mask;
     		} 
     		else
@@ -10940,9 +10924,9 @@ static inline void load_intra_pred_luma(cavs_decoder *p, uint8_t *p_top,uint8_t 
                 p->i_internal_border_y[i+1] = *(p->p_y + 7 + i*p->cur.i_stride[0]);
             }
             
-            //鐢变簬涓嬭竟鍧楋紙绱㈠紩涓�3锛夋湭瑙ｇ爜鎵�浠�9浠ュ悗鐨勮薄绱犵洿鎺ョ敤璞＄礌8鐨勫��
-            //褰撹В鐮�1锛�3鍧楃殑鏃跺�欑敱浜庡乏杈瑰潡c[i]鍙�鏈�1~8鏄�鍙�鐢ㄧ殑锛屽叾浠栫殑杩樻湭瑙ｇ爜锛屾墍浠ヤ笉鍙�鐢�
-            //鎵�浠ヤ笉鍙�鑳介噰鐢↖ntra_8x8_Down_Left,Intra_8x8_Down_Right妯″紡锛屾墍浠ヤ笉鍙�鑳介噰鐢�17浣嶇殑璞＄礌
+            // Extend the saved left edge by repeating the last valid sample.
+            // Load the next 8 top-edge samples from the cached top border.
+            // If top-right samples are unavailable, pad the edge array by replication.
             memset( &p->i_internal_border_y[9], p->i_internal_border_y[8], 9);
             p->i_internal_border_y[0] = p->i_internal_border_y[1];
             memcpy( &p_top[1], &p->p_top_border_y[p->i_mb_x*CAVS_MB_SIZE+8], 8 );
