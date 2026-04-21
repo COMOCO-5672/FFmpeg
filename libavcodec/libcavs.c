@@ -4560,6 +4560,7 @@ int cavs_get_video_sequence_header(cavs_bitstream *s,cavs_video_sequence_header 
     h->i_bbv_buffer_size = cavs_bitstream_get_bits(s, 18);
 
     if(cavs_bitstream_get_bits(s,3)!=0) //reserved bits
+    {
     /* reserved bits must be zero */
     }
 
