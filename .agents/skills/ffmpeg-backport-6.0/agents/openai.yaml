@@ -1,0 +1,4 @@
+display_name: FFmpeg Backport 6.0
+short_description: 6.0 分支回移植与提交组织
+default_prompt: >-
+  用这个 skill 帮我把上游或第三方 patch 回移植到 note_log/6.0，并说明 API 差异、最小改法和提交拆分。

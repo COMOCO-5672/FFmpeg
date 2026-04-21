@@ -1,0 +1,4 @@
+display_name: FFmpeg AVS Support
+short_description: AVS CAVS AVS+ 定位与修复
+default_prompt: >-
+  用这个 skill 帮我处理 D:\github\FFmpeg 中的 AVS、CAVS、AVS+ 探测、解码、回归、构建与验证问题。

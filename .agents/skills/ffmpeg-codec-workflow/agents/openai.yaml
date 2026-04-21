@@ -1,0 +1,4 @@
+display_name: FFmpeg Codec Workflow
+short_description: codec 排障、回归与优化流程
+default_prompt: >-
+  用这个 skill 帮我定位 codec、parser、bitstream 或解码回归问题，并给出最小验证和回归方案。

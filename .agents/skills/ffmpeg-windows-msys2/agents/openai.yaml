@@ -1,0 +1,4 @@
+display_name: FFmpeg Windows MSYS2
+short_description: Windows 和 MSYS2 构建调试
+default_prompt: >-
+  用这个 skill 帮我排查 D:\github\FFmpeg 在 Windows、MSYS2 和 VSCode 下的构建、运行、PATH、DLL 与调试问题。
