@@ -73,6 +73,7 @@ typedef struct HTTPContext {
     uint64_t chunksize;
     int chunkend;
     uint64_t off, end_off, filesize;
+    uint64_t request_end_off;
     char *uri;
     char *location;
     HTTPAuthState auth_state;
@@ -132,6 +133,7 @@ typedef struct HTTPContext {
     HandshakeState handshake_step;
     int is_connected_server;
     int short_seek_size;
+    int64_t range_request_size;
     int64_t expires;
     char *new_location;
     AVDictionary *redirect_cache;
@@ -167,6 +169,7 @@ static const AVOption options[] = {
     { "location", "The actual location of the data received", OFFSET(location), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D | E },
     { "offset", "initial byte offset", OFFSET(off), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
     { "end_offset", "try to limit the request to bytes preceding this offset", OFFSET(end_off), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
+    { "range_request_size", "limit each HTTP range request to this many bytes; 0 disables", OFFSET(range_request_size), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
     { "method", "Override the HTTP method or set the expected HTTP method from a client", OFFSET(method), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D | E },
     { "reconnect", "auto reconnect after disconnect before EOF", OFFSET(reconnect), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D },
     { "reconnect_at_eof", "auto reconnect at EOF", OFFSET(reconnect_at_eof), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D },
@@ -180,6 +183,26 @@ static const AVOption options[] = {
     { "short_seek_size", "Threshold to favor readahead over seek.", OFFSET(short_seek_size), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, D },
     { NULL }
 };
+
+/* Compute the exclusive end offset for the current HTTP GET window while
+ * preserving end_off as the logical stream boundary requested by the caller. */
+static uint64_t http_get_request_limit(const HTTPContext *s, uint64_t off)
+{
+    uint64_t request_end = s->end_off ? s->end_off : s->filesize;
+
+    if (s->range_request_size > 0) {
+        uint64_t range_end = off + s->range_request_size;
+
+        if (range_end < off)
+            range_end = UINT64_MAX;
+        if (request_end != UINT64_MAX)
+            request_end = FFMIN(request_end, range_end);
+        else
+            request_end = range_end;
+    }
+
+    return request_end;
+}
 
 static int http_connect(URLContext *h, const char *path, const char *local_path,
                         const char *hoststr, const char *auth,
@@ -1407,6 +1430,7 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     uint64_t off = s->off;
     const char *method;
     int send_expect_100 = 0;
+    int has_range_header;
 
     av_bprint_init_for_buffer(&request, s->buffer, sizeof(s->buffer));
 
@@ -1424,6 +1448,12 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
         method = s->method;
     else
         method = post ? "POST" : "GET";
+
+    has_range_header = has_header(s->headers, "\r\nRange: ");
+    if (!has_range_header)
+        s->request_end_off = http_get_request_limit(s, off);
+    else
+        s->request_end_off = s->end_off ? s->end_off : s->filesize;
 
     authstr      = ff_http_auth_create_response(&s->auth_state, auth,
                                                 local_path, method);
@@ -1465,10 +1495,10 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     // Note: we send the Range header on purpose, even when we're probing,
     // since it allows us to detect more reliably if a (non-conforming)
     // server supports seeking by analysing the reply headers.
-    if (!has_header(s->headers, "\r\nRange: ") && !post && (s->off > 0 || s->end_off || s->seekable != 0)) {
+    if (!has_range_header && !post && (s->off > 0 || s->request_end_off != UINT64_MAX || s->seekable != 0)) {
         av_bprintf(&request, "Range: bytes=%"PRIu64"-", s->off);
-        if (s->end_off)
-            av_bprintf(&request, "%"PRId64, s->end_off - 1);
+        if (s->request_end_off != UINT64_MAX)
+            av_bprintf(&request, "%"PRIu64, s->request_end_off - 1);
         av_bprintf(&request, "\r\n");
     }
     if (send_expect_100 && !has_header(s->headers, "\r\nExpect: "))
@@ -1560,6 +1590,8 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
 {
     HTTPContext *s = h->priv_data;
     int len;
+    uint64_t target_end = s->request_end_off ? s->request_end_off :
+                          (s->end_off ? s->end_off : s->filesize);
 
     if (s->chunksize != UINT64_MAX) {
         if (s->chunkend) {
@@ -1607,10 +1639,11 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
         memcpy(buf, s->buf_ptr, len);
         s->buf_ptr += len;
     } else {
-        uint64_t target_end = s->end_off ? s->end_off : s->filesize;
-        if ((!s->willclose || s->chunksize == UINT64_MAX) && s->off >= target_end)
+        if (target_end != UINT64_MAX && s->off >= target_end)
             return AVERROR_EOF;
         len = ffurl_read(s->hd, buf, size);
+        if (!len && target_end != UINT64_MAX && s->off >= target_end)
+            return AVERROR_EOF;
         if ((!len || len == AVERROR_EOF) &&
             (!s->willclose || s->chunksize == UINT64_MAX) && s->off < target_end) {
             av_log(h, AV_LOG_ERROR,
@@ -1687,7 +1720,28 @@ static int http_read_stream(URLContext *h, uint8_t *buf, int size)
 #endif /* CONFIG_ZLIB */
     read_ret = http_buf_read(h, buf, size);
     while (read_ret < 0) {
+        uint64_t logical_end = s->end_off ? s->end_off : s->filesize;
         uint64_t target = h->is_streamed ? 0 : s->off;
+
+        /* When a bounded request window ends cleanly, reopen the next window
+         * transparently so upper layers still observe one continuous stream. */
+        if (read_ret == AVERROR_EOF &&
+            s->range_request_size > 0 &&
+            !h->is_streamed &&
+            s->request_end_off != UINT64_MAX &&
+            s->off >= s->request_end_off &&
+            (logical_end == UINT64_MAX || s->off < logical_end)) {
+            seek_ret = http_seek_internal(h, target, SEEK_SET, 1);
+            if (seek_ret < 0)
+                return seek_ret;
+            if (seek_ret != target) {
+                av_log(h, AV_LOG_ERROR, "Failed to reopen segmented request at %"PRIu64".\n", target);
+                return AVERROR(EIO);
+            }
+
+            read_ret = http_buf_read(h, buf, size);
+            continue;
+        }
 
         if (read_ret == AVERROR_EXIT)
             break;
@@ -1900,6 +1954,7 @@ static int64_t http_seek_internal(URLContext *h, int64_t off, int whence, int fo
     HTTPContext *s = h->priv_data;
     URLContext *old_hd = s->hd;
     uint64_t old_off = s->off;
+    uint64_t old_request_end = s->request_end_off;
     uint8_t old_buf[BUFFER_SIZE];
     int old_buf_size, ret;
     AVDictionary *options = NULL;
@@ -1954,8 +2009,9 @@ static int64_t http_seek_internal(URLContext *h, int64_t off, int whence, int fo
         memcpy(s->buffer, old_buf, old_buf_size);
         s->buf_ptr = s->buffer;
         s->buf_end = s->buffer + old_buf_size;
-        s->hd      = old_hd;
-        s->off     = old_off;
+        s->hd              = old_hd;
+        s->off             = old_off;
+        s->request_end_off = old_request_end;
         return ret;
     }
     av_dict_free(&options);

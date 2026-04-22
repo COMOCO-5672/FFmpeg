@@ -515,6 +515,39 @@ Set initial byte offset.
 @item end_offset
 Try to limit the request to bytes preceding this offset.
 
+@item range_request_size
+Limit each HTTP Range request to this many bytes. When set to a value greater
+than 0, the client reopens the resource at the next byte offset after each
+completed range window until EOF or @option{end_offset}. Default is 0.
+
+This option only affects HTTP input. It does not change the logical stream
+layout seen by demuxers; it only changes how the HTTP protocol layer splits
+the underlying GET requests.
+
+If @option{end_offset} is also set, each request window is limited by the
+smaller of @option{end_offset} and @option{offset + range_request_size}.
+
+If a custom @code{Range:} header is supplied through @option{headers}, that
+header takes precedence and @option{range_request_size} will not override it.
+
+Example command-line usage:
+
+@example
+ffplay -seekable 1 -multiple_requests 1 \
+  -range_request_size 5242880 \
+  -headers $'Cookie: ...\r\nReferer: https://pan.quark.cn/\r\n' \
+  INPUT
+@end example
+
+Library users can pass the same option through @code{AVDictionary}:
+
+@example
+AVDictionary *opts = NULL;
+av_dict_set(&opts, "multiple_requests", "1", 0);
+av_dict_set(&opts, "range_request_size", "5242880", 0);
+avformat_open_input(&ctx, url, NULL, &opts);
+@end example
+
 @item method
 When used as a client option it sets the HTTP method for the request.
 
