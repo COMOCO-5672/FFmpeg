@@ -520,6 +520,9 @@ Limit each HTTP Range request to this many bytes. When set to a value greater
 than 0, the client reopens the resource at the next byte offset after each
 completed range window until EOF or @option{end_offset}. Default is 0.
 
+When set to 0, the protocol falls back to the original FFmpeg HTTP behavior
+without enabling this segmented request logic.
+
 This option only affects HTTP input. It does not change the logical stream
 layout seen by demuxers; it only changes how the HTTP protocol layer splits
 the underlying GET requests.

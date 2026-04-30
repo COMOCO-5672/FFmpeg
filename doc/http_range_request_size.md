@@ -27,6 +27,7 @@ the HTTP protocol layer.
 - Type: `int64`
 - Unit: bytes
 - Default: `0` meaning disabled
+  and preserving the original FFmpeg HTTP behavior
 
 When the value is greater than `0`, FFmpeg limits each HTTP GET request to at
 most that many bytes and transparently reopens the next request window after

@@ -184,13 +184,18 @@ static const AVOption options[] = {
     { NULL }
 };
 
+static int http_range_chunking_enabled(const HTTPContext *s)
+{
+    return s->range_request_size > 0;
+}
+
 /* Compute the exclusive end offset for the current HTTP GET window while
  * preserving end_off as the logical stream boundary requested by the caller. */
 static uint64_t http_get_request_limit(const HTTPContext *s, uint64_t off)
 {
     uint64_t request_end = s->end_off ? s->end_off : s->filesize;
 
-    if (s->range_request_size > 0) {
+    if (http_range_chunking_enabled(s)) {
         uint64_t range_end = off + s->range_request_size;
 
         if (range_end < off)
@@ -1450,7 +1455,7 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
         method = post ? "POST" : "GET";
 
     has_range_header = has_header(s->headers, "\r\nRange: ");
-    if (!has_range_header)
+    if (http_range_chunking_enabled(s) && !has_range_header)
         s->request_end_off = http_get_request_limit(s, off);
     else
         s->request_end_off = s->end_off ? s->end_off : s->filesize;
@@ -1495,10 +1500,17 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     // Note: we send the Range header on purpose, even when we're probing,
     // since it allows us to detect more reliably if a (non-conforming)
     // server supports seeking by analysing the reply headers.
-    if (!has_range_header && !post && (s->off > 0 || s->request_end_off != UINT64_MAX || s->seekable != 0)) {
+    if (http_range_chunking_enabled(s) &&
+        !has_range_header && !post &&
+        (s->off > 0 || s->request_end_off != UINT64_MAX || s->seekable != 0)) {
         av_bprintf(&request, "Range: bytes=%"PRIu64"-", s->off);
         if (s->request_end_off != UINT64_MAX)
             av_bprintf(&request, "%"PRIu64, s->request_end_off - 1);
+        av_bprintf(&request, "\r\n");
+    } else if (!has_range_header && !post && (s->off > 0 || s->end_off || s->seekable != 0)) {
+        av_bprintf(&request, "Range: bytes=%"PRIu64"-", s->off);
+        if (s->end_off)
+            av_bprintf(&request, "%"PRId64, s->end_off - 1);
         av_bprintf(&request, "\r\n");
     }
     if (send_expect_100 && !has_header(s->headers, "\r\nExpect: "))
@@ -1590,8 +1602,10 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
 {
     HTTPContext *s = h->priv_data;
     int len;
-    uint64_t target_end = s->request_end_off ? s->request_end_off :
-                          (s->end_off ? s->end_off : s->filesize);
+    uint64_t target_end = s->end_off ? s->end_off : s->filesize;
+
+    if (http_range_chunking_enabled(s))
+        target_end = s->request_end_off ? s->request_end_off : target_end;
 
     if (s->chunksize != UINT64_MAX) {
         if (s->chunkend) {
@@ -1639,10 +1653,14 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
         memcpy(buf, s->buf_ptr, len);
         s->buf_ptr += len;
     } else {
-        if (target_end != UINT64_MAX && s->off >= target_end)
+        if (http_range_chunking_enabled(s)) {
+            if (target_end != UINT64_MAX && s->off >= target_end)
+                return AVERROR_EOF;
+        } else if ((!s->willclose || s->chunksize == UINT64_MAX) && s->off >= target_end) {
             return AVERROR_EOF;
+        }
         len = ffurl_read(s->hd, buf, size);
-        if (!len && target_end != UINT64_MAX && s->off >= target_end)
+        if (http_range_chunking_enabled(s) && !len && target_end != UINT64_MAX && s->off >= target_end)
             return AVERROR_EOF;
         if ((!len || len == AVERROR_EOF) &&
             (!s->willclose || s->chunksize == UINT64_MAX) && s->off < target_end) {
@@ -1726,7 +1744,7 @@ static int http_read_stream(URLContext *h, uint8_t *buf, int size)
         /* When a bounded request window ends cleanly, reopen the next window
          * transparently so upper layers still observe one continuous stream. */
         if (read_ret == AVERROR_EOF &&
-            s->range_request_size > 0 &&
+            http_range_chunking_enabled(s) &&
             !h->is_streamed &&
             s->request_end_off != UINT64_MAX &&
             s->off >= s->request_end_off &&
